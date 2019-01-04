@@ -542,7 +542,7 @@ if __name__ == '__main__':
             logger.info("Horovod Rank={}, Size={}".format(hvd.rank(), hvd.size()))
 
         if not is_horovod or hvd.rank() == 0:
-            logger.set_logger_dir(args.logdir, 'd')
+            logger.set_logger_dir(args.logdir, 'k')
 
         finalize_configs(is_training=True)
         stepnum = cfg.TRAIN.STEPS_PER_EPOCH
@@ -566,9 +566,12 @@ if __name__ == '__main__':
         logger.info("Total passes of the training set is: {:.5g}".format(total_passes))
 
         callbacks = [
+            # ModelSaver(max_to_keep=10),
+            # # backup the model with best validation error
+            # MinSaver('val-error-top1'),
             PeriodicCallback(
                 ModelSaver(max_to_keep=10, keep_checkpoint_every_n_hours=1),
-                every_k_epochs=20),
+                every_k_epochs=1),
             # linear warmup
             ScheduledHyperParamSetter(
                 'learning_rate', warmup_schedule, interp='linear', step_based=True),

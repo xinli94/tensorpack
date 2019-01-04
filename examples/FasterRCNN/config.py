@@ -79,18 +79,36 @@ _C.MODE_MASK = True        # FasterRCNN or MaskRCNN
 _C.MODE_FPN = False
 
 # dataset -----------------------
-_C.DATA.BASEDIR = '/path/to/your/COCO/DIR'
-_C.DATA.TRAIN = ['train2014', 'valminusminival2014']   # i.e. trainval35k, AKA train2017
-# For now, only support evaluation on single dataset
-_C.DATA.VAL = 'minival2014'  # AKA val2017
-_C.DATA.NUM_CATEGORY = 80    # 80 categories in COCO
-_C.DATA.CLASS_NAMES = []  # NUM_CLASS (NUM_CATEGORY+1) strings, the first is "BG".
-# For COCO, this list will be populated later by the COCO data loader.
+# _C.DATA.BASEDIR = '/path/to/your/COCO/DIR'
+# _C.DATA.TRAIN = ['train2014', 'valminusminival2014']   # i.e. trainval35k, AKA train2017
+# # For now, only support evaluation on single dataset
+# _C.DATA.VAL = 'minival2014'  # AKA val2017
+# _C.DATA.NUM_CATEGORY = 80    # 80 categories in COCO
+# _C.DATA.CLASS_NAMES = []  # NUM_CLASS (NUM_CATEGORY+1) strings, the first is "BG".
+# # For COCO, this list will be populated later by the COCO data loader.
+
+# _C.DATA.BASEDIR='/data5/xin/coco2017/'
+# _C.DATA.TRAIN='train2017'
+# _C.DATA.VAL='val2017'
+# _C.DATA.NUM_CATEGORY = 80
+# _C.DATA.CLASS_NAMES =[]
+
+# _C.DATA.BASEDIR='/data5/xin/logo_jv/coco'
+# _C.DATA.TRAIN='train'
+# _C.DATA.VAL='test'
+# _C.DATA.NUM_CATEGORY=96
+# _C.DATA.CLASS_NAMES = ['aprilia', 'rice_krispies', 'corn_pops', 'eneos', 'santander_bank', 'jegs', 'mac_tools', 'asics', 'motul', 'dainese', 'ray-ban', 'g-shock', 'fox_racing', 'quiksilver', 'standard_chartered', 'patagonia', 'kellogg_s_all-bran', 'amc_network', 'martini', 'akrapovic', 'ducati', 'norton_rose_fulbright', 'kyb_corporation', 'dunlop_tires', 'rexona', 'citrix_systems', 'ohlins', 'kaspersky_lab', 'jcb', 'mclaren', 'ktm', 'frosted_flakes', 'shoei', 'sc_project', 'brembo', 'firestone', 'mapfre', 'ngk', 'crunch_nestle', 'cooper_tires', 'richard_mille', 'oris', 'smarties_nestle', 'salomon', 'qlik', 'coffee_crisp', 'atomic_skis', 'bwt', 'wahoo_s', 'lange_boots', 'penske', 'rossignol', 'ntt_communications', 'amg', 'oakley', 'rauch', 'nesquik', 'nutri-grain', 'claro', 'stp', 'randstad', 'agv', 'hankook_tires', 'estrella_galicia', 'columbia_sportswear', 'raisin_bran', 'estrella_damm', 'dewalt', 'galfer', 'hype_energy', 'arc_teryx', 'helly_hansen', 'united_states_air_force', 'apple_jacks', 'yoshimura', 'showa', 'akebono', 'bilstein_suspension', 'cool_whip', 'protaper', 'thor_mx', 'o_reilly_auto_parts', 'harvest_crunch', 'united_states_navy', 'chandon', 'united_states_marine_corps', 'united_states_army', 'kraft_dinner', 'crispix', 'wish_app', 'tecnica_sports', 'nos_energy_drink', 'union_bank', 'shake_n_bake', 'vortex_racing', 'burton']
+
+_C.DATA.BASEDIR='/data5/xin/logo_jv_48/coco'
+_C.DATA.TRAIN='train'
+_C.DATA.VAL='test'
+_C.DATA.NUM_CATEGORY = 48
+_C.DATA.CLASS_NAMES =['BG', 'enkei', 'axa', 'spectrum_internet', 'warka', 'renault_sport', 'walkers_snacks', 'bell_and_ross', 'petro-canada', 'uefa_champions_league', 'liverpool_f_c', 'betvictor', 'western_union', 'sagres_beer', 'bp_ultimate', 'carlsberg', 'canels', 'avon_products', 'pepsi_max', 'east_west_bank', 'city_of_hope_medical_center', 'la_liga', 'tmall', 'kio_networks', 'ucla_health', 'bank_of_alexandria', 'tatweer_misr', 'amstel', 'rci_bank_and_services', 'daniel_hechter', 'partycasino', 'liverpool_vodka', 'pechanga_resort_and_casino', 'seeing_is_believing', 'chaokoh', 'verti', 'eurodatacar', 'liverpool_gin', 'calsonic_kansei', 'joie', 'goodwill_private_jets', 'verbier', 'panach', 'dnb_asa', 'tigerwit', 'elysium_global', 'ixell_paint_company', 'expedia_group', 'enjoyresponsibly']
 
 # basemodel ----------------------
 _C.BACKBONE.WEIGHTS = ''   # /path/to/weights.npz
-_C.BACKBONE.RESNET_NUM_BLOCKS = [3, 4, 6, 3]     # for resnet50
-# RESNET_NUM_BLOCKS = [3, 4, 23, 3]    # for resnet101
+# _C.BACKBONE.RESNET_NUM_BLOCKS = [3, 4, 6, 3]     # for resnet50
+_C.BACKBONE.RESNET_NUM_BLOCKS = [3, 4, 23, 3]    # for resnet101
 _C.BACKBONE.FREEZE_AFFINE = False   # do not train affine parameters inside norm layers
 _C.BACKBONE.NORM = 'FreezeBN'  # options: FreezeBN, SyncBN, GN, None
 _C.BACKBONE.FREEZE_AT = 2  # options: 0, 1, 2
@@ -124,7 +142,7 @@ _C.TRAIN.LR_SCHEDULE = [240000, 320000, 360000]      # "2x" schedule in detectro
 # Longer schedules for from-scratch training (https://arxiv.org/abs/1811.08883):
 # _C.TRAIN.LR_SCHEDULE = [960000, 1040000, 1080000]    # "6x" schedule in detectron
 # _C.TRAIN.LR_SCHEDULE = [1500000, 1580000, 1620000]   # "9x" schedule in detectron
-_C.TRAIN.EVAL_PERIOD = 25  # period (epochs) to run eva
+_C.TRAIN.EVAL_PERIOD = 1  # period (epochs) to run eva
 
 # preprocessing --------------------
 # Alternative old (worse & faster) setting: 600
