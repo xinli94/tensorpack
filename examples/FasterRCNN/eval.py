@@ -2,22 +2,32 @@
 # File: eval.py
 
 import itertools
-import numpy as np
 import os
+import json
+import numpy as np
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 import cv2
 import pycocotools.mask as cocomask
 import tqdm
-from pycocotools.coco import COCO
-from pycocotools.cocoeval import COCOeval
+import tensorflow as tf
 
-from tensorpack.utils.utils import get_tqdm_kwargs
+from tensorpack.callbacks import Callback
+from tensorpack.tfutils import get_tf_version_tuple
+from tensorpack.utils import logger
+from tensorpack.utils.utils import get_tqdm
 
-from coco import COCOMeta
 from common import CustomResize, clip_boxes
+from data import get_eval_dataflow
+from dataset import DetectionDataset
 from config import config as cfg
+
+try:
+    import horovod.tensorflow as hvd
+except ImportError:
+    pass
+
 
 DetectionResult = namedtuple(
     'DetectionResult',
@@ -30,7 +40,7 @@ mask: None, or a binary image of the original image shape
 """
 
 
-def paste_mask(box, mask, shape):
+def _paste_mask(box, mask, shape):
     """
     Args:
         box: 4 float
@@ -58,15 +68,15 @@ def paste_mask(box, mask, shape):
     return ret
 
 
-def detect_one_image(img, model_func):
+def predict_image(img, model_func):
     """
     Run detection on one image, using the TF callable.
     This function should handle the preprocessing internally.
 
     Args:
         img: an image
-        model_func: a callable from TF model,
-            takes image and returns (boxes, probs, labels, [masks])
+        model_func: a callable from the TF model.
+            It takes image and returns (boxes, probs, labels, [masks])
 
     Returns:
         [DetectionResult]
@@ -83,7 +93,7 @@ def detect_one_image(img, model_func):
 
     if masks:
         # has mask
-        full_masks = [paste_mask(box, mask, orig_shape)
+        full_masks = [_paste_mask(box, mask, orig_shape)
                       for box, mask in zip(boxes, masks[0])]
         masks = full_masks
     else:
@@ -94,36 +104,32 @@ def detect_one_image(img, model_func):
     return results
 
 
-def eval_coco(df, detect_func, tqdm_bar=None):
+def predict_dataflow(df, model_func, tqdm_bar=None):
     """
     Args:
         df: a DataFlow which produces (image, image_id)
-        detect_func: a callable, takes [image] and returns [DetectionResult]
+        model_func: a callable from the TF model.
+            It takes image and returns (boxes, probs, labels, [masks])
         tqdm_bar: a tqdm object to be shared among multiple evaluation instances. If None,
             will create a new one.
 
     Returns:
-        list of dict, to be dumped to COCO json format
+        list of dict, in the format used by
+        `DetectionDataset.eval_or_save_inference_results`
     """
     df.reset_state()
     all_results = []
-    # tqdm is not quite thread-safe: https://github.com/tqdm/tqdm/issues/323
     with ExitStack() as stack:
+        # tqdm is not quite thread-safe: https://github.com/tqdm/tqdm/issues/323
         if tqdm_bar is None:
-            tqdm_bar = stack.enter_context(
-                tqdm.tqdm(total=df.size(), **get_tqdm_kwargs()))
+            tqdm_bar = stack.enter_context(get_tqdm(total=df.size()))
         for img, img_id in df:
-            results = detect_func(img)
+            results = predict_image(img, model_func)
             for r in results:
-                box = r.box
-                cat_id = COCOMeta.class_id_to_category_id[r.class_id]
-                box[2] -= box[0]
-                box[3] -= box[1]
-
                 res = {
                     'image_id': img_id,
-                    'category_id': cat_id,
-                    'bbox': list(map(lambda x: round(float(x), 3), box)),
+                    'category_id': r.class_id,
+                    'bbox': list(r.box),
                     'score': round(float(r.score), 4),
                 }
 
@@ -138,50 +144,113 @@ def eval_coco(df, detect_func, tqdm_bar=None):
     return all_results
 
 
-def multithread_eval_coco(dataflows, detect_funcs):
+def multithread_predict_dataflow(dataflows, model_funcs):
     """
-    Running multiple `eval_coco` in multiple threads, and aggregate the results.
+    Running multiple `predict_dataflow` in multiple threads, and aggregate the results.
 
     Args:
-        dataflows: a list of DataFlow to be used in :func:`eval_coco`
-        detect_funcs: a list of callable to be used in :func:`eval_coco`
+        dataflows: a list of DataFlow to be used in :func:`predict_dataflow`
+        model_funcs: a list of callable to be used in :func:`predict_dataflow`
 
     Returns:
-        list of dict, to be dumped to COCO json format
+        list of dict, in the format used by
+        `DetectionDataset.eval_or_save_inference_results`
     """
-    num_worker = len(dataflows)
-    assert len(dataflows) == len(detect_funcs)
+    num_worker = len(model_funcs)
+    assert len(dataflows) == num_worker
+    if num_worker == 1:
+        return predict_dataflow(dataflows[0], model_funcs[0])
     with ThreadPoolExecutor(max_workers=num_worker, thread_name_prefix='EvalWorker') as executor, \
             tqdm.tqdm(total=sum([df.size() for df in dataflows])) as pbar:
         futures = []
-        for dataflow, pred in zip(dataflows, detect_funcs):
-            futures.append(executor.submit(eval_coco, dataflow, pred, pbar))
+        for dataflow, pred in zip(dataflows, model_funcs):
+            futures.append(executor.submit(predict_dataflow, dataflow, pred, pbar))
         all_results = list(itertools.chain(*[fut.result() for fut in futures]))
         return all_results
 
 
-# https://github.com/pdollar/coco/blob/master/PythonAPI/pycocoEvalDemo.ipynb
-def print_coco_metrics(json_file):
-    ret = {}
-    assert cfg.DATA.BASEDIR and os.path.isdir(cfg.DATA.BASEDIR)
-    annofile = os.path.join(
-        cfg.DATA.BASEDIR, 'annotations',
-        'instances_{}.json'.format(cfg.DATA.VAL))
-    coco = COCO(annofile)
-    cocoDt = coco.loadRes(json_file)
-    cocoEval = COCOeval(coco, cocoDt, 'bbox')
-    cocoEval.evaluate()
-    cocoEval.accumulate()
-    cocoEval.summarize()
-    fields = ['IoU=0.5:0.95', 'IoU=0.5', 'IoU=0.75', 'small', 'medium', 'large']
-    for k in range(6):
-        ret['mAP(bbox)/' + fields[k]] = cocoEval.stats[k]
+class EvalCallback(Callback):
+    """
+    A callback that runs evaluation once a while.
+    It supports multi-gpu evaluation.
+    """
 
-    if cfg.MODE_MASK:
-        cocoEval = COCOeval(coco, cocoDt, 'segm')
-        cocoEval.evaluate()
-        cocoEval.accumulate()
-        cocoEval.summarize()
-        for k in range(6):
-            ret['mAP(segm)/' + fields[k]] = cocoEval.stats[k]
-    return ret
+    _chief_only = False
+
+    def __init__(self, eval_dataset, in_names, out_names, output_dir):
+        self._eval_dataset = eval_dataset
+        self._in_names, self._out_names = in_names, out_names
+        self._output_dir = output_dir
+
+    def _setup_graph(self):
+        num_gpu = cfg.TRAIN.NUM_GPUS
+        if cfg.TRAINER == 'replicated':
+            # TF bug in version 1.11, 1.12: https://github.com/tensorflow/tensorflow/issues/22750
+            buggy_tf = get_tf_version_tuple() in [(1, 11), (1, 12)]
+
+            # Use two predictor threads per GPU to get better throughput
+            self.num_predictor = num_gpu if buggy_tf else num_gpu * 2
+            self.predictors = [self._build_predictor(k % num_gpu) for k in range(self.num_predictor)]
+            self.dataflows = [get_eval_dataflow(self._eval_dataset,
+                                                shard=k, num_shards=self.num_predictor)
+                              for k in range(self.num_predictor)]
+        else:
+            # Only eval on the first machine.
+            # Alternatively, can eval on all ranks and use allgather, but allgather sometimes hangs
+            self._horovod_run_eval = hvd.rank() == hvd.local_rank()
+            if self._horovod_run_eval:
+                self.predictor = self._build_predictor(0)
+                self.dataflow = get_eval_dataflow(self._eval_dataset,
+                                                  shard=hvd.local_rank(), num_shards=hvd.local_size())
+
+            self.barrier = hvd.allreduce(tf.random_normal(shape=[1]))
+
+    def _build_predictor(self, idx):
+        return self.trainer.get_predictor(self._in_names, self._out_names, device=idx)
+
+    def _before_train(self):
+        eval_period = cfg.TRAIN.EVAL_PERIOD
+        self.epochs_to_eval = set()
+        for k in itertools.count(1):
+            if k * eval_period > self.trainer.max_epoch:
+                break
+            self.epochs_to_eval.add(k * eval_period)
+        self.epochs_to_eval.add(self.trainer.max_epoch)
+        logger.info("[EvalCallback] Will evaluate every {} epochs".format(eval_period))
+
+    def _eval(self):
+        logdir = self._output_dir
+        if cfg.TRAINER == 'replicated':
+            all_results = multithread_predict_dataflow(self.dataflows, self.predictors)
+        else:
+            filenames = [os.path.join(
+                logdir, 'outputs{}-part{}.json'.format(self.global_step, rank)
+            ) for rank in range(hvd.local_size())]
+
+            if self._horovod_run_eval:
+                local_results = predict_dataflow(self.dataflow, self.predictor)
+                fname = filenames[hvd.local_rank()]
+                with open(fname, 'w') as f:
+                    json.dump(local_results, f)
+            self.barrier.eval()
+            if hvd.rank() > 0:
+                return
+            all_results = []
+            for fname in filenames:
+                with open(fname, 'r') as f:
+                    obj = json.load(f)
+                all_results.extend(obj)
+                os.unlink(fname)
+
+        output_file = os.path.join(
+            logdir, '{}-outputs{}.json'.format(self._eval_dataset, self.global_step))
+
+        scores = DetectionDataset().eval_or_save_inference_results(
+            all_results, self._eval_dataset, output_file)
+        for k, v in scores.items():
+            self.trainer.monitors.put_scalar(k, v)
+
+    def _trigger_epoch(self):
+        if self.epoch_num in self.epochs_to_eval:
+            logger.info("Running evaluation ...")
+            self._eval()

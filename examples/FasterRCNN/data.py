@@ -4,46 +4,49 @@
 import copy
 import numpy as np
 import cv2
+from tabulate import tabulate
+from termcolor import colored
 
 from tensorpack.dataflow import (
     DataFromList, MapDataComponent, MultiProcessMapDataZMQ, MultiThreadMapData, TestDataSpeed, imgaug)
 from tensorpack.utils import logger
 from tensorpack.utils.argtools import log_once, memoized
 
-from coco import COCODetection
 from common import (
-    CustomResize, DataFromListOfDict, box_to_point8, filter_boxes_inside_shape, point8_to_box, segmentation_to_mask)
+    CustomResize, DataFromListOfDict, box_to_point8,
+    filter_boxes_inside_shape, point8_to_box, segmentation_to_mask, np_iou)
 from config import config as cfg
+from dataset import DetectionDataset
 from utils.generate_anchors import generate_anchors
-from utils.np_box_ops import area as np_area
-from utils.np_box_ops import ioa as np_ioa
+from utils.np_box_ops import area as np_area, ioa as np_ioa
 
 import tensorpack.utils.viz as tpviz
 
 
-try:
-    import pycocotools.mask as cocomask
-
-    # Much faster than utils/np_box_ops
-    def np_iou(A, B):
-        def to_xywh(box):
-            box = box.copy()
-            box[:, 2] -= box[:, 0]
-            box[:, 3] -= box[:, 1]
-            return box
-
-        ret = cocomask.iou(
-            to_xywh(A), to_xywh(B),
-            np.zeros((len(B),), dtype=np.bool))
-        # can accelerate even more, if using float32
-        return ret.astype('float32')
-
-except ImportError:
-    from utils.np_box_ops import iou as np_iou
-
-
 class MalformedData(BaseException):
     pass
+
+
+def print_class_histogram(roidbs):
+    """
+    Args:
+        roidbs (list[dict]): the same format as the output of `load_training_roidbs`.
+    """
+    dataset = DetectionDataset()
+    hist_bins = np.arange(dataset.num_classes + 1)
+
+    # Histogram of ground-truth objects
+    gt_hist = np.zeros((dataset.num_classes,), dtype=np.int)
+    for entry in roidbs:
+        # filter crowd?
+        gt_inds = np.where(
+            (entry['class'] > 0) & (entry['is_crowd'] == 0))[0]
+        gt_classes = entry['class'][gt_inds]
+        gt_hist += np.histogram(gt_classes, bins=hist_bins)[0]
+    data = [[dataset.class_names[i], v] for i, v in enumerate(gt_hist)]
+    data.append(['total', sum([x[1] for x in data])])
+    table = tabulate(data, headers=['class', '#box'], tablefmt='pipe')
+    logger.info("Ground-Truth Boxes:\n" + colored(table, 'cyan'))
 
 
 @memoized
@@ -119,7 +122,7 @@ def get_anchor_labels(anchors, gt_boxes, crowd_boxes):
     Label each anchor as fg/bg/ignore.
     Args:
         anchors: Ax4 float
-        gt_boxes: Bx4 float
+        gt_boxes: Bx4 float, non-crowd
         crowd_boxes: Cx4 float
 
     Returns:
@@ -279,9 +282,10 @@ def get_train_dataflow(val=False):
 
     If MODE_MASK, gt_masks: (N, h, w)
     """
+# <<<<<<< HEAD
     TAG = [cfg.DATA.TRAIN, cfg.DATA.VAL][int(val)]
-    roidbs = COCODetection.load_many(
-        cfg.DATA.BASEDIR, TAG, add_gt=True, add_mask=cfg.MODE_MASK)
+#     roidbs = COCODetection.load_many(
+#         cfg.DATA.BASEDIR, TAG, add_gt=True, add_mask=cfg.MODE_MASK)
     """
     To train on your own data, change this to your loader.
     Produce "roidbs" as a list of dict, in the dict the following keys are needed for training:
@@ -299,6 +303,11 @@ def get_train_dataflow(val=False):
         either convert it, or the augmentation code below will need to be
         changed or skipped accordingly.
     """
+# =======
+    # roidbs = DetectionDataset().load_training_roidbs(cfg.DATA.TRAIN)
+    roidbs = DetectionDataset().load_training_roidbs(TAG)
+    print_class_histogram(roidbs)
+# >>>>>>> f5d1714a13002a7f04755a1c1afe7d70c2b71ef1
 
     # Valid training images should have at least one fg box.
     # But this filter shall not be applied for testing.
@@ -384,12 +393,14 @@ def get_train_dataflow(val=False):
     return ds
 
 
-def get_eval_dataflow(shard=0, num_shards=1):
+def get_eval_dataflow(name, shard=0, num_shards=1):
     """
     Args:
+        name (str): name of the dataset to evaluate
         shard, num_shards: to get subset of evaluation data
     """
-    roidbs = COCODetection.load_many(cfg.DATA.BASEDIR, cfg.DATA.VAL, add_gt=False)
+    roidbs = DetectionDataset().load_inference_roidbs(name)
+
     num_imgs = len(roidbs)
     img_per_shard = num_imgs // num_shards
     img_range = (shard * img_per_shard, (shard + 1) * img_per_shard if shard + 1 < num_shards else num_imgs)

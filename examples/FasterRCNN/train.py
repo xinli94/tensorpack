@@ -4,12 +4,12 @@
 
 import argparse
 import itertools
-import json
 import numpy as np
 import os
 import shutil
 import cv2
 import six
+assert six.PY3, "FasterRCNN requires Python 3!"
 import tensorflow as tf
 import tqdm
 
@@ -22,11 +22,10 @@ from tensorpack.tfutils.summary import add_moving_summary
 import model_frcnn
 import model_mrcnn
 from basemodel import image_preprocess, resnet_c4_backbone, resnet_conv5, resnet_fpn_backbone
-from coco import COCODetection
-from config import config as cfg
-from config import finalize_configs
+from dataset import DetectionDataset
+from config import finalize_configs, config as cfg
 from data import get_all_anchors, get_all_anchors_fpn, get_eval_dataflow, get_train_dataflow
-from eval import DetectionResult, detect_one_image, eval_coco, multithread_eval_coco, print_coco_metrics
+from eval import DetectionResult, predict_image, multithread_predict_dataflow, EvalCallback
 from model_box import RPNAnchors, clip_boxes, crop_and_resize, roi_align
 from model_cascade import CascadeRCNNHead
 from model_fpn import fpn_model, generate_fpn_proposals, multilevel_roi_align, multilevel_rpn_losses
@@ -39,8 +38,6 @@ try:
     import horovod.tensorflow as hvd
 except ImportError:
     pass
-
-assert six.PY3, "FasterRCNN requires Python 3!"
 
 
 class DetectionModel(ModelDesc):
@@ -57,7 +54,7 @@ class DetectionModel(ModelDesc):
         lr = tf.get_variable('learning_rate', initializer=0.003, trainable=False)
         tf.summary.scalar('learning_rate-summary', lr)
 
-        # The learning rate is set for 8 GPUs, and we use trainers with average=False.
+        # The learning rate in the config is set for 8 GPUs, and we use trainers with average=False.
         lr = lr / 8.
         opt = tf.train.MomentumOptimizer(lr, 0.9)
         if cfg.TRAIN.NUM_GPUS < 8:
@@ -323,7 +320,7 @@ class ResNetFPNModel(DetectionModel):
             return []
 
 
-def visualize(model, model_path, nr_visualize=100, output_dir='output', val=False):
+def do_visualize(model, model_path, nr_visualize=100, output_dir='output', val=False):
     """
     Visualize some intermediate results (proposals, raw predictions) inside the pipeline.
     """
@@ -378,28 +375,24 @@ def visualize(model, model_path, nr_visualize=100, output_dir='output', val=Fals
             pbar.update()
 
 
-def offline_evaluate(pred_config, output_file):
+def do_evaluate(pred_config, output_file):
     num_gpu = cfg.TRAIN.NUM_GPUS
     graph_funcs = MultiTowerOfflinePredictor(
         pred_config, list(range(num_gpu))).get_predictors()
-    predictors = []
-    dataflows = []
-    for k in range(num_gpu):
-        predictors.append(lambda img,
-                          pred=graph_funcs[k]: detect_one_image(img, pred))
-        dataflows.append(get_eval_dataflow(shard=k, num_shards=num_gpu))
-    if num_gpu > 1:
-        all_results = multithread_eval_coco(dataflows, predictors)
-    else:
-        all_results = eval_coco(dataflows[0], predictors[0])
-    with open(output_file, 'w') as f:
-        json.dump(all_results, f)
-    print_coco_metrics(output_file)
+
+    for dataset in cfg.DATA.VAL:
+        logger.info("Evaluating {} ...".format(dataset))
+        dataflows = [
+            get_eval_dataflow(dataset, shard=k, num_shards=num_gpu)
+            for k in range(num_gpu)]
+        all_results = multithread_predict_dataflow(dataflows, graph_funcs)
+        output = output_file + '-' + dataset
+        DetectionDataset().eval_or_save_inference_results(all_results, dataset, output)
 
 
-def predict(pred_func, input_file):
+def do_predict(pred_func, input_file):
     img = cv2.imread(input_file, cv2.IMREAD_COLOR)
-    results = detect_one_image(img, pred_func)
+    results = predict_image(img, pred_func)
     final = draw_final_outputs(img, results)
     viz = np.concatenate((img, final), axis=1)
     cv2.imwrite("output.png", viz)
@@ -407,99 +400,12 @@ def predict(pred_func, input_file):
     tpviz.interactive_imshow(viz)
 
 
-class EvalCallback(Callback):
-    """
-    A callback that runs COCO evaluation once a while.
-    It supports multi-gpu evaluation.
-    """
-
-    _chief_only = False
-
-    def __init__(self, in_names, out_names):
-        self._in_names, self._out_names = in_names, out_names
-
-    def _setup_graph(self):
-        num_gpu = cfg.TRAIN.NUM_GPUS
-        if cfg.TRAINER == 'replicated':
-            # TF bug in version 1.11, 1.12: https://github.com/tensorflow/tensorflow/issues/22750
-            buggy_tf = get_tf_version_tuple() in [(1, 11), (1, 12)]
-
-            # Use two predictor threads per GPU to get better throughput
-            self.num_predictor = num_gpu if buggy_tf else num_gpu * 2
-            self.predictors = [self._build_coco_predictor(k % num_gpu) for k in range(self.num_predictor)]
-            self.dataflows = [get_eval_dataflow(shard=k, num_shards=self.num_predictor)
-                              for k in range(self.num_predictor)]
-        else:
-            # Only eval on the first machine.
-            # Alternatively, can eval on all ranks and use allgather, but allgather sometimes hangs
-            self._horovod_run_eval = hvd.rank() == hvd.local_rank()
-            if self._horovod_run_eval:
-                self.predictor = self._build_coco_predictor(0)
-                self.dataflow = get_eval_dataflow(shard=hvd.local_rank(), num_shards=hvd.local_size())
-
-            self.barrier = hvd.allreduce(tf.random_normal(shape=[1]))
-
-    def _build_coco_predictor(self, idx):
-        graph_func = self.trainer.get_predictor(self._in_names, self._out_names, device=idx)
-        return lambda img: detect_one_image(img, graph_func)
-
-    def _before_train(self):
-        eval_period = cfg.TRAIN.EVAL_PERIOD
-        self.epochs_to_eval = set()
-        for k in itertools.count(1):
-            if k * eval_period > self.trainer.max_epoch:
-                break
-            self.epochs_to_eval.add(k * eval_period)
-        self.epochs_to_eval.add(self.trainer.max_epoch)
-        logger.info("[EvalCallback] Will evaluate every {} epochs".format(eval_period))
-
-    def _eval(self):
-        logdir = args.logdir
-        if cfg.TRAINER == 'replicated':
-            all_results = multithread_eval_coco(self.dataflows, self.predictors)
-        else:
-            filenames = [os.path.join(
-                logdir, 'outputs{}-part{}.json'.format(self.global_step, rank)
-            ) for rank in range(hvd.local_size())]
-
-            if self._horovod_run_eval:
-                local_results = eval_coco(self.dataflow, self.predictor)
-                fname = filenames[hvd.local_rank()]
-                with open(fname, 'w') as f:
-                    json.dump(local_results, f)
-            self.barrier.eval()
-            if hvd.rank() > 0:
-                return
-            all_results = []
-            for fname in filenames:
-                with open(fname, 'r') as f:
-                    obj = json.load(f)
-                all_results.extend(obj)
-                os.unlink(fname)
-
-        output_file = os.path.join(
-            logdir, 'outputs{}.json'.format(self.global_step))
-        with open(output_file, 'w') as f:
-            json.dump(all_results, f)
-        try:
-            scores = print_coco_metrics(output_file)
-            for k, v in scores.items():
-                self.trainer.monitors.put_scalar(k, v)
-        except Exception:
-            logger.exception("Exception in COCO evaluation.")
-
-    def _trigger_epoch(self):
-        if self.epoch_num in self.epochs_to_eval:
-            logger.info("Running evaluation ...")
-            self._eval()
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--load', help='load a model for evaluation or training. Can overwrite BACKBONE.WEIGHTS')
     parser.add_argument('--logdir', help='log directory', default='train_log/maskrcnn')
     parser.add_argument('--visualize', action='store_true', help='visualize intermediate results')
-    parser.add_argument('--evaluate', help="Run evaluation on COCO. "
+    parser.add_argument('--evaluate', help="Run evaluation. "
                                            "This argument is the path to the output json evaluation file")
     parser.add_argument('--predict', help="Run prediction on a given image. "
                                           "This argument is the path to the input image file")
@@ -515,6 +421,7 @@ if __name__ == '__main__':
         cfg.update_args(args.config)
 
     MODEL = ResNetFPNModel() if cfg.MODE_FPN else ResNetC4Model()
+    DetectionDataset()  # initialize the config with information from our dataset
 
     if args.visualize or args.evaluate or args.predict:
         assert tf.test.is_gpu_available()
@@ -525,7 +432,7 @@ if __name__ == '__main__':
             cfg.TEST.RESULT_SCORE_THRESH = cfg.TEST.RESULT_SCORE_THRESH_VIS
 
         if args.visualize:
-            visualize(MODEL, args.load, val=args.evaluate)
+            do_visualize(MODEL, args.load, val=args.evaluate)
         else:
             predcfg = PredictConfig(
                 model=MODEL,
@@ -533,11 +440,10 @@ if __name__ == '__main__':
                 input_names=MODEL.get_inference_tensor_names()[0],
                 output_names=MODEL.get_inference_tensor_names()[1])
             if args.predict:
-                COCODetection(cfg.DATA.BASEDIR, 'val2014')   # Only to load the class names into caches
-                predict(OfflinePredictor(predcfg), args.predict)
+                do_predict(OfflinePredictor(predcfg), args.predict)
             elif args.evaluate:
                 assert args.evaluate.endswith('.json'), args.evaluate
-                offline_evaluate(predcfg, args.evaluate)
+                do_evaluate(predcfg, args.evaluate)
     else:
         is_horovod = cfg.TRAINER == 'horovod'
         if is_horovod:
@@ -579,10 +485,12 @@ if __name__ == '__main__':
             ScheduledHyperParamSetter(
                 'learning_rate', warmup_schedule, interp='linear', step_based=True),
             ScheduledHyperParamSetter('learning_rate', lr_schedule),
-            EvalCallback(*MODEL.get_inference_tensor_names()),
             PeakMemoryTracker(),
             EstimatedTimeLeft(median=True),
             SessionRunTimeout(60000).set_chief_only(True),   # 1 minute timeout
+        ] + [
+            EvalCallback(dataset, *MODEL.get_inference_tensor_names(), args.logdir)
+            for dataset in cfg.DATA.VAL
         ]
         if not is_horovod:
             callbacks.append(GPUUtilizationTracker())
