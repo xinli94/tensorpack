@@ -323,11 +323,11 @@ class ResNetFPNModel(DetectionModel):
             return []
 
 
-def visualize(model, model_path, nr_visualize=100, output_dir='output'):
+def visualize(model, model_path, nr_visualize=100, output_dir='output', val=False):
     """
     Visualize some intermediate results (proposals, raw predictions) inside the pipeline.
     """
-    df = get_train_dataflow()   # we don't visualize mask stuff
+    df = get_train_dataflow(val)   # we don't visualize mask stuff
     df.reset_state()
 
     pred = OfflinePredictor(PredictConfig(
@@ -346,6 +346,7 @@ def visualize(model, model_path, nr_visualize=100, output_dir='output'):
     if os.path.isdir(output_dir):
         shutil.rmtree(output_dir)
     utils.fs.mkdir_p(output_dir)
+
     with tqdm.tqdm(total=nr_visualize) as pbar:
         for idx, dp in itertools.islice(enumerate(df), nr_visualize):
             img, gt_boxes, gt_labels = dp['image'], dp['gt_boxes'], dp['gt_labels']
@@ -369,9 +370,11 @@ def visualize(model, model_path, nr_visualize=100, output_dir='output'):
                 gt_viz, proposal_viz,
                 score_viz, final_viz], 2, 2)
 
-            if os.environ.get('DISPLAY', None):
-                tpviz.interactive_imshow(viz)
-            cv2.imwrite("{}/{:03d}.png".format(output_dir, idx), viz)
+            # if os.environ.get('DISPLAY', None):
+                # tpviz.interactive_imshow(viz)
+
+            # cv2.imwrite("{}/{:03d}.png".format(output_dir, idx), viz)
+            cv2.imwrite("{}/{}{:03d}.png".format(output_dir, os.path.splitext(os.path.basename(dp['file_name']), idx))[0], viz)
             pbar.update()
 
 
@@ -522,7 +525,7 @@ if __name__ == '__main__':
             cfg.TEST.RESULT_SCORE_THRESH = cfg.TEST.RESULT_SCORE_THRESH_VIS
 
         if args.visualize:
-            visualize(MODEL, args.load)
+            visualize(MODEL, args.load, val=args.evaluate)
         else:
             predcfg = PredictConfig(
                 model=MODEL,
@@ -566,12 +569,12 @@ if __name__ == '__main__':
         logger.info("Total passes of the training set is: {:.5g}".format(total_passes))
 
         callbacks = [
-            # ModelSaver(max_to_keep=10),
-            # # backup the model with best validation error
-            # MinSaver('val-error-top1'),
-            PeriodicCallback(
-                ModelSaver(max_to_keep=10, keep_checkpoint_every_n_hours=1),
-                every_k_epochs=1),
+            ModelSaver(max_to_keep=10),
+            # backup the model with best validation error
+            MinSaver('val-error-top1'),
+            # PeriodicCallback(
+            #     ModelSaver(max_to_keep=10, keep_checkpoint_every_n_hours=1),
+            #     every_k_epochs=1),
             # linear warmup
             ScheduledHyperParamSetter(
                 'learning_rate', warmup_schedule, interp='linear', step_based=True),

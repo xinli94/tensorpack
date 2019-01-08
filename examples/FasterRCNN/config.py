@@ -101,7 +101,8 @@ _C.MODE_FPN = False
 
 _C.DATA.BASEDIR='/data5/xin/logo_jv_48/coco'
 _C.DATA.TRAIN='train'
-_C.DATA.VAL='test'
+# _C.DATA.VAL='test'
+_C.DATA.VAL='test_new'
 _C.DATA.NUM_CATEGORY = 48
 _C.DATA.CLASS_NAMES =['BG', 'enkei', 'axa', 'spectrum_internet', 'warka', 'renault_sport', 'walkers_snacks', 'bell_and_ross', 'petro-canada', 'uefa_champions_league', 'liverpool_f_c', 'betvictor', 'western_union', 'sagres_beer', 'bp_ultimate', 'carlsberg', 'canels', 'avon_products', 'pepsi_max', 'east_west_bank', 'city_of_hope_medical_center', 'la_liga', 'tmall', 'kio_networks', 'ucla_health', 'bank_of_alexandria', 'tatweer_misr', 'amstel', 'rci_bank_and_services', 'daniel_hechter', 'partycasino', 'liverpool_vodka', 'pechanga_resort_and_casino', 'seeing_is_believing', 'chaokoh', 'verti', 'eurodatacar', 'liverpool_gin', 'calsonic_kansei', 'joie', 'goodwill_private_jets', 'verbier', 'panach', 'dnb_asa', 'tigerwit', 'elysium_global', 'ixell_paint_company', 'expedia_group', 'enjoyresponsibly']
 
@@ -109,6 +110,7 @@ _C.DATA.CLASS_NAMES =['BG', 'enkei', 'axa', 'spectrum_internet', 'warka', 'renau
 _C.BACKBONE.WEIGHTS = ''   # /path/to/weights.npz
 # _C.BACKBONE.RESNET_NUM_BLOCKS = [3, 4, 6, 3]     # for resnet50
 _C.BACKBONE.RESNET_NUM_BLOCKS = [3, 4, 23, 3]    # for resnet101
+# _C.BACKBONE.RESNET_NUM_BLOCKS = [3, 8, 36, 3]    # for resnet152
 _C.BACKBONE.FREEZE_AFFINE = False   # do not train affine parameters inside norm layers
 _C.BACKBONE.NORM = 'FreezeBN'  # options: FreezeBN, SyncBN, GN, None
 _C.BACKBONE.FREEZE_AT = 2  # options: 0, 1, 2
@@ -125,7 +127,8 @@ _C.BACKBONE.STRIDE_1X1 = False  # True for MSRA models
 
 # schedule -----------------------
 _C.TRAIN.NUM_GPUS = None         # by default, will be set from code
-_C.TRAIN.WEIGHT_DECAY = 1e-4
+# _C.TRAIN.WEIGHT_DECAY = 1e-4
+_C.TRAIN.WEIGHT_DECAY = 1e-8
 _C.TRAIN.BASE_LR = 1e-2  # defined for total batch size=8. Otherwise it will be adjusted automatically
 _C.TRAIN.WARMUP = 1000   # in terms of iterations. This is not affected by #GPUs
 _C.TRAIN.WARMUP_INIT_LR = 1e-2 * 0.33  # defined for total batch size=8. Otherwise it will be adjusted automatically
@@ -138,7 +141,9 @@ _C.TRAIN.STARTING_EPOCH = 1  # the first epoch to start with, useful to continue
 # Therefore, there is *no need* to modify the config if you only change the number of GPUs.
 
 # _C.TRAIN.LR_SCHEDULE = [120000, 160000, 180000]      # "1x" schedule in detectron
-_C.TRAIN.LR_SCHEDULE = [240000, 320000, 360000]      # "2x" schedule in detectron
+# _C.TRAIN.LR_SCHEDULE = [240000, 320000, 360000]      # "2x" schedule in detectron
+_C.TRAIN.LR_SCHEDULE = [200000, 280000, 360000]
+
 # Longer schedules for from-scratch training (https://arxiv.org/abs/1811.08883):
 # _C.TRAIN.LR_SCHEDULE = [960000, 1040000, 1080000]    # "6x" schedule in detectron
 # _C.TRAIN.LR_SCHEDULE = [1500000, 1580000, 1620000]   # "9x" schedule in detectron

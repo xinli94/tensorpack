@@ -18,7 +18,7 @@ from utils.generate_anchors import generate_anchors
 from utils.np_box_ops import area as np_area
 from utils.np_box_ops import ioa as np_ioa
 
-# import tensorpack.utils.viz as tpviz
+import tensorpack.utils.viz as tpviz
 
 
 try:
@@ -264,7 +264,7 @@ def get_multilevel_rpn_anchor_input(im, boxes, is_crowd):
     return multilevel_inputs
 
 
-def get_train_dataflow():
+def get_train_dataflow(val=False):
     """
     Return a training dataflow. Each datapoint consists of the following:
 
@@ -279,9 +279,9 @@ def get_train_dataflow():
 
     If MODE_MASK, gt_masks: (N, h, w)
     """
-
+    TAG = [cfg.DATA.TRAIN, cfg.DATA.VAL][int(val)]
     roidbs = COCODetection.load_many(
-        cfg.DATA.BASEDIR, cfg.DATA.TRAIN, add_gt=True, add_mask=cfg.MODE_MASK)
+        cfg.DATA.BASEDIR, TAG, add_gt=True, add_mask=cfg.MODE_MASK)
     """
     To train on your own data, change this to your loader.
     Produce "roidbs" as a list of dict, in the dict the following keys are needed for training:
@@ -329,7 +329,10 @@ def get_train_dataflow():
         boxes = point8_to_box(points)
         assert np.min(np_area(boxes)) > 0, "Some boxes have zero area!"
 
-        ret = {'image': im}
+        if val:
+            ret = {'image': im, 'file_name': fname}
+        else:
+            ret = {'image': im}
         # rpn anchor:
         try:
             if cfg.MODE_FPN:

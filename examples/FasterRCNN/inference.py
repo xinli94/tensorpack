@@ -34,14 +34,17 @@ def _offline_evaluate(pred_config, output_file):
     else:
         all_results = _eval_coco(dataflows[0], predictors[0])
 
-    with open(output_file + '.json', 'w') as f:
+    with open(output_file + '.json', 'w+') as f:
         json.dump(all_results, f)
-    print_coco_metrics(output_file)
+    print_coco_metrics(output_file + '.json')
 
     records = []
     for res in all_results:
         width, height = Image.open(res['image_path']).size
-        records.append([res['image_path'], 0, width, height, res['bbox'][0], res['bbox'][1], res['bbox'][2], res['bbox'][3], res['score'], res['label']])
+        # left, top, right, bottom = [float(item) for item in res['bbox']]
+        x1, y1, w, h = [float(item) for item in res['bbox']]
+        left, top, right, bottom = [x1, y1, x1 + w, y1 + h]
+        records.append([res['image_path'], 0, width, height, left, top, right, bottom, res['score'], res['label']])
 
     records_df = pd.DataFrame.from_records(records, columns=['path', 'timestamp', 'width', 'height', 'left', 'top', 'right', 'bottom', 'score', 'class'])
     records_df.to_csv(output_file + '.csv', index=False, header=False)

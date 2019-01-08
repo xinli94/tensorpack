@@ -4,7 +4,7 @@ import numpy as np
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--ckpt', type=str, default='', help='The checkpoint to be filtered')
-parser.add_argument('--blacklist', type=str, default='fastrcnn/outputs/,maskrcnn/conv/', help='Blacklist nodes')
+parser.add_argument('--blacklist', type=str, default='fastrcnn/outputs/,maskrcnn/conv/,cascade_rcnn_stage1/outputs/,cascade_rcnn_stage2/outputs/,cascade_rcnn_stage3/outputs/', help='Blacklist nodes')
 
 args = parser.parse_args()
 
