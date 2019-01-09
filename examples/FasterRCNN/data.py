@@ -282,10 +282,6 @@ def get_train_dataflow(val=False):
 
     If MODE_MASK, gt_masks: (N, h, w)
     """
-# <<<<<<< HEAD
-    TAG = [cfg.DATA.TRAIN, cfg.DATA.VAL][int(val)]
-#     roidbs = COCODetection.load_many(
-#         cfg.DATA.BASEDIR, TAG, add_gt=True, add_mask=cfg.MODE_MASK)
     """
     To train on your own data, change this to your loader.
     Produce "roidbs" as a list of dict, in the dict the following keys are needed for training:
@@ -303,11 +299,9 @@ def get_train_dataflow(val=False):
         either convert it, or the augmentation code below will need to be
         changed or skipped accordingly.
     """
-# =======
-    # roidbs = DetectionDataset().load_training_roidbs(cfg.DATA.TRAIN)
+    TAG = [cfg.DATA.TRAIN, cfg.DATA.VAL][int(val)]
     roidbs = DetectionDataset().load_training_roidbs(TAG)
     print_class_histogram(roidbs)
-# >>>>>>> f5d1714a13002a7f04755a1c1afe7d70c2b71ef1
 
     # Valid training images should have at least one fg box.
     # But this filter shall not be applied for testing.

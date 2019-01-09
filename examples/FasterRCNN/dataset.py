@@ -329,10 +329,11 @@ class DetectionDataset(object):
         assert output is not None, "COCO evaluation requires an output file!"
         with open(output, 'w') as f:
             json.dump(results, f)
-        if len(output):
+        if len(output) and len(results):
             # sometimes may crash if the results are empty?
             return COCODetection(cfg.DATA.BASEDIR, dataset).print_coco_metrics(output)
         else:
+            print('==> Warning: results are empty')
             return {}
 
     # code for singleton:

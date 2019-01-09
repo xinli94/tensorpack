@@ -128,9 +128,9 @@ def predict_dataflow(df, model_func, tqdm_bar=None):
             results = predict_image(img, model_func)
             for r in results:
                 res = {
-                    'image_id': img_id,
-                    'category_id': r.class_id,
-                    'bbox': list(r.box),
+                    'image_id': int(img_id),
+                    'category_id': int(r.class_id),
+                    'bbox': list([float(i) for i in r.box]),
                     'score': round(float(r.score), 4),
                 }
 
